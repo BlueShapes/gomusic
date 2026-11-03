@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gomusic (musicord) — 使い方と仕様</title>
+<style>
+  :root {
+    --bg: #101418; --panel: #171d24; --line: #2a333d; --fg: #dbe3ea;
+    --muted: #93a2b1; --accent: #6cb6ff; --warn: #ffb454; --ok: #7ee787;
+    --code-bg: #0c1116;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.75 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  }
+  main { max-width: 1000px; margin: 0 auto; padding: 32px 20px 96px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 44px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 26px 0 8px; color: var(--accent); }
+  p, li { color: var(--fg); }
+  .sub { color: var(--muted); margin: 0 0 24px; font-size: 13px; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto; line-height: 1.5;
+  }
+  pre code { background: none; border: 0; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 8px; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; white-space: nowrap; }
+  tbody tr:hover { background: var(--panel); }
+  nav {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 16px; margin: 24px 0 8px; font-size: 14px;
+  }
+  nav a { color: var(--accent); text-decoration: none; margin-right: 14px; white-space: nowrap; }
+  nav a:hover { text-decoration: underline; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .muted { color: var(--muted); }
+  .tag {
+    display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); margin-left: 6px; vertical-align: 2px;
+  }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+
+<h1>gomusic <span class="muted">/ musicord のGo移植</span></h1>
+<p class="sub">
+  最終更新: 2026-11-03 ・ 対象: <code>github.com/blueshapes/gomusic</code>（M1〜M4 実装済み、Docker は未着手）
+</p>
+
+<nav>
+  <a href="#overview">概要</a>
+  <a href="#requirements">動作要件</a>
+  <a href="#quickstart">起動</a>
+  <a href="#config">設定</a>
+  <a href="#commands">コマンド</a>
+  <a href="#internals">内部仕様</a>
+  <a href="#logs">ログ</a>
+  <a href="#measured">実測値</a>
+  <a href="#limits">制限・未実装</a>
+  <a href="#deploy">デプロイ</a>
+  <a href="#dev">開発用CLI</a>
+</nav>
+
+<h2 id="overview">概要</h2>
+<p>
+  Discord のボイスチャンネルで音楽を流すボット。元実装（Kotlin + Kord + Lavalink/LavaSrc）を
+  Go（<a href="https://github.com/disgoorg/disgo">disgo</a>）で書き直したもので、<strong>Lavalink を使わず
+  yt-dlp 一本</strong>で音源を取得する。
+</p>
+
+<pre><code>Discord slash command
+  → disgo handler（goroutineで実行）
+    → player.Manager（ギルドごとに1つの Player）
+      → audio.Cache（yt-dlp | ffmpeg → cache/&lt;videoID&gt;.ogg）
+      → audio.Reader（ogg パケット = 20ms フレーム）
+        → voice.Conn（DAVE/E2EE で暗号化して送出）</code></pre>
+
+<div class="grid2">
+  <div class="card">
+    <h3 style="margin-top:0">設計の柱</h3>
+    <ul>
+      <li><strong>パススルー</strong>: YouTube の bestaudio は 48kHz ステレオ opus / 20ms フレーム。
+          そのまま ogg に詰め替えるだけで送れる（音声処理ゼロ）</li>
+      <li><strong>100%再生は無変換</strong>: 音量100%ではデコードもしない</li>
+      <li><strong>シークは読み飛ばし</strong>: パケットを先頭から捨てるだけ（実測 30秒位置へ 2ms）</li>
+      <li><strong>DAVE(E2EE) 必須</strong>: 2026年以降のDiscord要件。<code>dave-go</code>（純Go）を使用</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">やらないこと</h3>
+    <ul>
+      <li>Lavalink / LavaSrc / 外部音声サーバ（不要）</li>
+      <li>ffmpeg による通常再生時の再エンコード（パススルー優先）</li>
+      <li>ライブ配信の再生（キャッシュが確定しないため拒否）</li>
+      <li>音源のストリーミング開始（DL完了後に再生を開始する）</li>
+    </ul>
+  </div>
+</div>
+
+<h2 id="requirements">動作要件</h2>
+<table>
+  <thead><tr><th>項目</th><th>要件</th><th>備考</th></tr></thead>
+  <tbody>
+    <tr><td>Go</td><td>1.26 以上</td><td><code>dave-go</code> が 1.26+ を要求</td></tr>
+    <tr><td>yt-dlp</td><td>最新版推奨</td><td>YouTube の JS チャレンジ（EJS）対応版</td></tr>
+    <tr><td>JS ランタイム</td><td>node 22+ または deno 2.3+</td><td>yt-dlp は既定で deno のみ有効。node を使う場合は <code>--js-runtimes node</code> が必要（既定の <code>extra_args</code> で設定済み）</td></tr>
+    <tr><td>ffmpeg</td><td>libopus 入り</td><td>ogg への詰め替え（<code>-c:a copy</code>）と、非opusソースの再エンコードに使用</td></tr>
+    <tr><td>ディスク</td><td><code>cache_dir</code> に数GB</td><td>44.1kHz相当で約2〜3MB/曲、1時間物は約56MB</td></tr>
+    <tr><td>Discord</td><td>Bot トークン + ギルドID</td><td>Intent: Guilds / GuildVoiceStates。Voice は DAVE 必須</td></tr>
+  </tbody>
+</table>
+
+<h2 id="quickstart">起動</h2>
+<pre><code>cd ~/blueshapes/gomusic
+go build -o musicord .
+
+./musicord          # config.toml が無ければ既定値を書き出して終了する
+$EDITOR config.toml # discord.token と discord.guild_ids を設定
+./musicord          # 起動（スラッシュコマンドは起動時にギルドへ同期される）</code></pre>
+<p class="muted">
+  初回起動では <code>config.toml</code> を生成して終了する（トークン未設定のまま起動しないため）。
+  設定ファイルに無いキーは既定値で補完されるので、項目を追加した後も古い設定ファイルをそのまま使える。
+</p>
+
+<h2 id="config">設定リファレンス（config.toml）</h2>
+<pre><code>[discord]
+token = "token is here"          # Bot トークン（必須）
+guild_ids = []                   # コマンドを登録するギルドID（必須・1つ以上）
+
+[yt_dlp]
+bin = "yt-dlp"                   # 実行ファイル名 or パス
+cookies = ""                     # 任意: cookies.txt（年齢制限/ボット判定対策）
+max_playlist = 100               # プレイリスト展開の上限。負値で無制限
+extra_args = ["--no-js-runtimes", "--js-runtimes", "node"]
+
+[audio]
+ffmpeg = "ffmpeg"                # ffmpeg の実行ファイル名 or パス
+cache_dir = "cache"              # ogg キャッシュの置き場
+max_cache_mb = 4096              # キャッシュの総量上限（超過分は古い順に削除）
+concurrency = 2                  # 同時に走る yt-dlp/ffmpeg の本数</code></pre>
+
+<table>
+  <thead><tr><th>キー</th><th>既定</th><th>意味</th></tr></thead>
+  <tbody>
+    <tr><td><code>discord.token</code></td><td>—</td><td>未設定（<code>"token is here"</code>）だと起動を拒否する</td></tr>
+    <tr><td><code>discord.guild_ids</code></td><td>—</td><td>空だと起動を拒否する。グローバルコマンドではなくギルドコマンドとして登録</td></tr>
+    <tr><td><code>yt_dlp.cookies</code></td><td><code>""</code></td><td>指定時のみ <code>--cookies</code> を付与</td></tr>
+    <tr><td><code>yt_dlp.max_playlist</code></td><td><code>100</code></td><td><code>--playlist-end</code> として渡す。上限を超える分は<strong>取得すらしない</strong>（解決は約4ms/件）</td></tr>
+    <tr><td><code>yt_dlp.extra_args</code></td><td><code>--no-js-runtimes --js-runtimes node</code></td><td>全 yt-dlp 呼び出しに前置される。順序が重要（先に <code>--no-js-runtimes</code>）</td></tr>
+    <tr><td><code>audio.max_cache_mb</code></td><td><code>4096</code></td><td><code>.ogg</code> の合計サイズが超えたら mtime の古い順に削除（0以下で無効）</td></tr>
+    <tr><td><code>audio.concurrency</code></td><td><code>2</code></td><td>セマフォ本数。3本目以降は待機</td></tr>
+  </tbody>
+</table>
+
+<h3>環境変数（config.toml より優先）</h3>
+<p>
+  ファイルの値を<strong>env が上書き</strong>する（未設定の項目は config.toml のまま）。
+  コンテナでは config.toml を書き換えずに env で差し替えられる。数値系に不正な値があると起動時にエラーになる。
+</p>
+<table>
+  <thead><tr><th>環境変数</th><th>上書きする設定</th><th>例</th></tr></thead>
+  <tbody>
+    <tr><td><code>DISCORD_TOKEN</code></td><td><code>discord.token</code></td><td>秘密をファイルに置かずに済む</td></tr>
+    <tr><td><code>DISCORD_GUILD_IDS</code></td><td><code>discord.guild_ids</code></td><td><code>"111,222"</code>（カンマ区切り）</td></tr>
+    <tr><td><code>CACHE_DIR</code></td><td><code>audio.cache_dir</code></td><td><code>/cache</code></td></tr>
+    <tr><td><code>MAX_CACHE_MB</code></td><td><code>audio.max_cache_mb</code></td><td><code>4096</code></td></tr>
+    <tr><td><code>CONCURRENCY</code></td><td><code>audio.concurrency</code></td><td><code>2</code></td></tr>
+    <tr><td><code>FFMPEG</code></td><td><code>audio.ffmpeg</code></td><td><code>/usr/bin/ffmpeg</code></td></tr>
+    <tr><td><code>YTDLP_BIN</code></td><td><code>yt_dlp.bin</code></td><td><code>/usr/local/bin/yt-dlp</code></td></tr>
+  </tbody>
+</table>
+
+<h2 id="commands">コマンドリファレンス</h2>
+<p class="muted">エイリアスは同名ハンドラの別コマンドとして登録される（元実装と同じ）。</p>
+
+<table>
+  <thead><tr><th>コマンド</th><th>引数</th><th>動作</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>/play</code> <code>/p</code></td>
+      <td><code>query</code>（必須）</td>
+      <td>URL なら動画/プレイリストを解決してキューへ。文字列なら <code>ytsearch5</code> の結果を<strong>セレクトメニュー</strong>で提示し、選ばれた1曲をキューへ</td>
+    </tr>
+    <tr><td><code>/pause</code></td><td>—</td><td>一時停止／再開のトグル。位置は止まる</td></tr>
+    <tr><td><code>/skip</code></td><td>—</td><td>現在の曲を打ち切り、次の曲へ</td></tr>
+    <tr><td><code>/seek</code></td><td><code>position</code>（<code>90</code> / <code>1:30</code> / <code>1:02:03</code>）</td><td>絶対位置のみ。曲長を超える指定は拒否。相対指定（<code>+10</code>）は非対応</td></tr>
+    <tr><td><code>/volume</code></td><td><code>percent</code>（0〜200）</td><td>ギルド単位の音量。100%は無変換、それ以外は1フレームごとにデコード→ゲイン→エンコード</td></tr>
+    <tr><td><code>/nowplaying</code> <code>/np</code></td><td>—</td><td>曲名・プログレスバー・経過/長さ・投稿者・次の曲。<span class="muted">一時停止中は曲名に「(一時停止中)」</span></td></tr>
+    <tr><td><code>/queue</code> <code>/q</code></td><td><code>page</code>（任意, 1〜）</td><td>待機中キューを10件/ページで表示（現在の曲は含まない）</td></tr>
+    <tr><td><code>/shuffle</code></td><td>—</td><td>待機キューをシャッフル</td></tr>
+    <tr><td><code>/clear</code></td><td>—</td><td>待機キューを空にする（現在の曲は鳴り続ける）</td></tr>
+    <tr><td><code>/loop</code></td><td><code>type</code>: <code>off</code> / <code>queue</code></td><td><code>queue</code> は曲終了時に末尾へ再追加（単曲ループは無し）</td></tr>
+    <tr><td><code>/join</code></td><td>—</td><td>実行者と同じVCへ接続（無音）。動作確認用</td></tr>
+    <tr><td><code>/leave</code> <code>/disconnect</code> <code>/dc</code> <code>/kick</code> <code>/stop</code> <code>/quit</code></td><td>—</td><td>切断してキューを破棄</td></tr>
+    <tr><td><code>/help</code></td><td>—</td><td>コマンド一覧（<code>/name: 説明</code> 形式。メンション形式ではない）</td></tr>
+    <tr><td><code>/ping</code></td><td>—</td><td>疎通確認</td></tr>
+  </tbody>
+</table>
+
+<h3>VC の検証（再生系コマンド共通）</h3>
+<table>
+  <thead><tr><th>状況</th><th>応答（ephemeral）</th></tr></thead>
+  <tbody>
+    <tr><td>実行者がVCに居ない</td><td>先にVCに接続してください。</td></tr>
+    <tr><td>ボットがどのVCにも居ない（<code>/play</code> 以外）</td><td>現在、ボットはどのVCにも参加していません。</td></tr>
+    <tr><td>実行者とボットが別のVC</td><td>ボットの接続しているVCに接続していないようです。</td></tr>
+    <tr><td>DMで実行</td><td>DMでは使えません。</td></tr>
+  </tbody>
+</table>
+<p class="muted"><code>/play</code> はボット未接続でも実行でき、そのまま実行者と同じVCへ自動接続する。</p>
+
+<h2 id="internals">内部仕様</h2>
+
+<h3>1. メタデータ解決（yt-dlp）</h3>
+<table>
+  <thead><tr><th>入力</th><th>コマンド</th><th>実測</th></tr></thead>
+  <tbody>
+    <tr><td>検索語</td><td><code>yt-dlp -J --flat-playlist --no-warnings --playlist-end N "ytsearchN:query"</code></td><td>5件で約1.8s、100件で約2.5s</td></tr>
+    <tr><td>URL（動画/プレイリスト）</td><td><code>yt-dlp -J --no-playlist --flat-playlist --no-warnings URL</code></td><td>プレイリスト123件で約2.6s</td></tr>
+  </tbody>
+</table>
+<p class="muted">
+  <code>--flat-playlist</code> を使うのは、完全展開が約5倍遅いため（5件で8.6s vs 1.8s）。
+  その代償として <code>is_live</code> が取れないので、ライブ判定はダウンロード時に回している。
+  動画+リストのURL（<code>&amp;list=RD...</code>）は <code>--no-playlist</code> により単曲扱い。
+</p>
+
+<h3>2. キャッシュ生成（<code>audio.Cache.Prepare</code>）</h3>
+<pre><code>yt-dlp -f "bestaudio[ext=webm]/bestaudio/best" \
+       --match-filter "!is_live" --no-playlist --playlist-items 1 -o - URL
+  | ffmpeg -i pipe:0 -vn -map 0:a -c:a copy -f ogg cache/&lt;id&gt;.ogg.part
+  → 先頭5パケットを検証（20ms かつ 1275バイト以下）
+  → 不合格なら -c:a libopus -b:a 96k -ar 48000 -ac 2 -frame_duration 20 で作り直す
+  → os.Rename(.part → .ogg) で確定（原子的）</code></pre>
+<ul>
+  <li><strong>パススルー優先</strong>: 再エンコードは「詰め替えで済まないソース」だけ。完了ログに <code>mode=passthrough</code> / <code>mode=re-encoded</code> が出る</li>
+  <li><strong>合流</strong>: 同じ videoID への同時要求は1ジョブを共有（<code>inflight</code> マップ）</li>
+  <li><strong>同時実行</strong>: <code>audio.concurrency</code> 本のセマフォ</li>
+  <li><strong>タイムアウト</strong>: 1曲10分。超過時は <code>yt-dlp timed out</code></li>
+  <li><strong>キャッシュヒット</strong>: <code>os.Stat</code> のみ＋mtime 更新（LRU用）。ダウンロードしない</li>
+  <li><strong>削除</strong>: 生成完了のたびに総量を確認し、<code>max_cache_mb</code> を超えていれば mtime 昇順に削除</li>
+  <li><strong>ライブ拒否</strong>: <code>--match-filter "!is_live"</code>。ライブはファイルが完成しないため</li>
+</ul>
+
+<h3>3. ダウンロードが走るタイミング</h3>
+<table>
+  <thead><tr><th>契機</th><th>内容</th></tr></thead>
+  <tbody>
+    <tr><td><code>/play</code> 直後（非同期）</td><td>その呼び出しで渡された<strong>先頭3曲</strong>を <code>go prefetch()</code>。キューの位置ではなく「呼び出し単位」である点に注意</td></tr>
+    <tr><td>曲の切り替え時</td><td><code>advance()</code> が次の曲を <code>Prepare</code>。未キャッシュならここでDL（その間は無音）</td></tr>
+    <tr><td>その他のコマンド</td><td>一切ダウンロードしない（<code>/seek</code> も不可。既存ファイルの読み直しのみ）</td></tr>
+  </tbody>
+</table>
+
+<h3>4. 再生（<code>player.provider</code>）</h3>
+<ul>
+  <li>disgo の <code>OpusFrameProvider</code> を実装。呼ばれるたびに ogg から<strong>1パケット（20ms）</strong>を返す</li>
+  <li><strong>一時停止</strong>＝フレームを返さない（<code>nil, nil</code>）。disgo が無音5フレーム→SpeakingFlagNone まで面倒を見るので、位置も自然に停止する</li>
+  <li><strong>曲終了</strong>＝ogg の EOF。別goroutineで <code>onEnd</code> を呼び、次曲へ（<code>SetOpusFrameProvider</code> が旧providerを Close するため、同期実行だと自己デッドロックする）</li>
+  <li><strong>再生位置</strong>＝読み出したパケットの20ms累積（フレーム数×20ms）</li>
+  <li><strong>ループ</strong>（<code>queue</code>）は終了した曲をキュー末尾へ再追加してから次へ</li>
+</ul>
+
+<h3>5. シーク</h3>
+<p>
+  ファイルを先頭から読み直し、目標位置までパケットを捨てる方式。granule 索引は持たない。
+  実測 30秒位置へ <strong>2ms</strong>、10分の曲でも約50ms（読み出しは 0.83ms/10秒）。
+</p>
+
+<h3>6. 音量</h3>
+<table>
+  <thead><tr><th>設定</th><th>処理</th><th>コスト</th></tr></thead>
+  <tbody>
+    <tr><td>100%</td><td>完全パススルー（デコードしない）</td><td>ゼロ</td></tr>
+    <tr><td>0〜200%</td><td><code>pion/opus</code> でデコード → ゲイン＋リミッター → <code>kazzmir/opus-go</code> でエンコード（128kbps）</td><td>約410µs/フレーム ≒ 1ギルドあたり1コアの約2%</td></tr>
+  </tbody>
+</table>
+<p class="muted">
+  100%超はハードクリップせず、-3dBFS から tanh で丸める（実測: 150%で原本ピーク85.7%の音源をハードクリップすると0.007%のサンプルが張り付く）。
+  音量変更は次フレームから反映され、ストリームの再起動やギャップは発生しない。音量はメモリ保持（再起動で100%に戻る）。
+</p>
+
+<h3>7. キューとギルド状態</h3>
+<ul>
+  <li>ギルドごとに <code>player.Player</code>（<code>Manager</code> が map で保持）。永続化はしない</li>
+  <li><code>queue</code> は「待機中の曲」のみ。<code>current</code> は別フィールド</li>
+  <li>すべての状態変更は <code>sync.Mutex</code> 保護。DL・接続は <code>advance()</code> のgoroutineで行う</li>
+</ul>
+
+<h3>8. 自動退出</h3>
+<ul>
+  <li><code>GuildVoiceLeave</code>: 抜けた人がボットと同じVCの最後の人間なら切断＋Player破棄（判定は <code>Member.User.Bot</code> でボットを除外、自分自身も除外）</li>
+  <li><code>GuildVoiceStateUpdate</code>: ボット自身が切断された（キック等）場合は voice conn と Player を掃除</li>
+</ul>
+
+<h3>9. DAVE（E2EE）と disgo の落とし穴</h3>
+<table>
+  <thead><tr><th>問題</th><th>対策（実装済み）</th></tr></thead>
+  <tbody>
+    <tr><td>DAVE 非対応だとVCに入れない（2026年以降の必須要件）</td><td><code>voice.WithDaveSessionCreateFunc(session.CreateFunc())</code>（<code>dave-go</code>、純Goなので cgo 不要）</td></tr>
+    <tr><td>disgo は既定で<strong>何もキャッシュしない</strong>（<code>CacheFlags=0</code>）ため <code>Caches.VoiceState()</code> が常に false</td><td><code>cache.WithCaches(FlagVoiceStates, FlagMembers)</code> を明示</td></tr>
+    <tr><td>gatewayイベントは<strong>同期</strong>配送。ハンドラが <code>conn.Open</code> で待つと、待っているイベント自体が配送されず固まる</td><td><code>r.Use(middleware.Go)</code> でハンドラをgoroutine化</td></tr>
+    <tr><td>VC接続（DAVEハンドシェイク）は数秒かかり、interaction の3秒応答期限を超える</td><td><code>/play</code> <code>/join</code> は先に <code>DeferCreateMessage</code> → 結果はfollowup。接続自体は30秒の独自タイムアウト</td></tr>
+  </tbody>
+</table>
+
+<h2 id="logs">ログ（slog / Info）</h2>
+<table>
+  <thead><tr><th>メッセージ</th><th>意味</th></tr></thead>
+  <tbody>
+    <tr><td><code>cache hit</code> id=… file=… size_mb=…</td><td>キャッシュから再生（DLなし）</td></tr>
+    <tr><td><code>downloading track</code> id=… title=… duration=…</td><td>セマフォを取得し、実際にDLが開始された</td></tr>
+    <tr><td><code>cached track</code> file=… mode=passthrough|re-encoded took=…</td><td>DL完了。詰め替えだけで済んだか、再エンコードしたか</td></tr>
+    <tr><td><code>now playing</code> id=… title=… duration=…</td><td>曲の再生開始</td></tr>
+    <tr><td><code>voice connection established</code> … took=…</td><td>VC接続完了（1秒台なら正常）</td></tr>
+    <tr><td><code>queue drained</code></td><td>キューが空になった</td></tr>
+    <tr><td><code>last human left the voice channel, disconnecting</code></td><td>自動退出</td></tr>
+    <tr><td><code>evicted cache file</code> file=…</td><td>容量上限による削除</td></tr>
+    <tr><td><code>source is not Discord-ready, re-encoding</code> reason=…</td><td>パススルー不可（20msでない等）→ 再エンコードへ</td></tr>
+    <tr><td><code>playlist truncated</code> / <code>skipped unavailable playlist entries</code></td><td>上限超過 / 非公開動画のスキップ</td></tr>
+  </tbody>
+</table>
+
+<h2 id="measured">実測値（Apple M1 Pro / Go 1.26.10）</h2>
+<table>
+  <thead><tr><th>処理</th><th>結果</th></tr></thead>
+  <tbody>
+    <tr><td>webm→ogg 詰め替え（<code>-c:a copy</code>）</td><td>3分33秒の曲で <strong>131ms</strong>、10,653パケット保持</td></tr>
+    <tr><td>DL込みのキャッシュ生成</td><td>3分33秒の曲で <strong>5.1秒</strong>（3.2MB、約3MB/s）</td></tr>
+    <tr><td>再生開始までの時間（初回 /play URL）</td><td>解決2s + DL5s + VC接続1.1s ≒ <strong>約8秒</strong></td></tr>
+    <tr><td>シーク</td><td>30秒位置へ <strong>2ms</strong></td></tr>
+    <tr><td>音量変更（デコード+ゲイン+エンコード）</td><td><strong>410µs/20msフレーム</strong>（pion デコード 49µs + kazzmir エンコード 399µs）</td></tr>
+    <tr><td>ライブ判定・20ms判定</td><td>YouTube の opus は全パケット 20ms（10,653/10,653）</td></tr>
+    <tr><td>プレイリスト解決</td><td>100件で <strong>約2.5秒</strong>（約4ms/件）</td></tr>
+  </tbody>
+</table>
+
+<h2 id="deploy">デプロイ（Docker）</h2>
+<p>
+  <code>Dockerfile</code> は2ステージ構成。ビルド側は <code>CGO_ENABLED=0</code> の静的バイナリ
+  （dave-go / pion-opus / kazzmir-opus-go はいずれも cgo 非依存）、実行側は
+  <code>node:24-bookworm-slim</code> + ffmpeg + <code>yt-dlp_linux</code>。
+</p>
+<pre><code>mkdir -p data                        # 先に作る（無いと root 所有で作られる）
+docker compose build
+docker compose run --rm gomusic      # 初回: data/config.toml を生成して終了
+$EDITOR data/config.toml             # token と guild_ids を書く
+docker compose up -d
+docker compose logs -f</code></pre>
+<p>
+  状態は全てホストの <code>./data</code> に入る（<code>data/config.toml</code> と <code>data/cache/</code>）。
+  <code>WORKDIR</code> が <code>/app</code> なので、<code>config.toml</code> の相対パスも
+  <code>cache_dir = "cache"</code> も自動的にこのディレクトリ配下に解決される（env 上書き不要）。
+</p>
+<p class="muted">
+  Linux で uid が 1000 でない場合は <code>sudo chown -R 1000:1000 data</code> が必要
+  （コンテナは <code>node</code> = uid 1000 で動く）。書き込み不可なら起動時に
+  <code>cache dir /app/cache is not writable</code> で落ちる。Docker Desktop (macOS) は通常そのまま動く。
+</p>
+
+<table>
+  <thead><tr><th>構成要素</th><th>内容</th></tr></thead>
+  <tbody>
+    <tr><td>ベース</td><td><code>node:24-bookworm-slim</code>（LTS・maintenance、Debian 12 固定）</td></tr>
+    <tr><td>yt-dlp</td><td>公式 PyInstaller バイナリ（<code>yt-dlp_linux</code> / <code>yt-dlp_linux_aarch64</code>）。
+      EJS スクリプト同梱なので <strong>python 不要</strong>。<code>YTDLP_VERSION</code> でピン留め</td></tr>
+    <tr><td>JS ランタイム</td><td>ベースイメージの node をそのまま使用（<code>--js-runtimes node</code> は既定の <code>extra_args</code> に設定済み）</td></tr>
+    <tr><td>ffmpeg</td><td>apt（libopus 入り）。ogg 詰め替えと再エンコードに使用</td></tr>
+    <tr><td>永続化</td><td><code>./data:/app</code> の単一バインド。<code>data/config.toml</code> と <code>data/cache/</code> がホストに残る（名前付きボリュームは使わない）</td></tr>
+    <tr><td>実行ユーザ</td><td><code>node</code>（uid 1000）。<code>/app</code> はイメージ側で chown 済み（バインド時はホスト側の所有者に従う）</td></tr>
+    <tr><td>メモリ</td><td><code>mem_limit: 1536m</code>（yt-dlp + node のピークが約430MB、<code>concurrency=2</code> を見込む）</td></tr>
+    <tr><td>停止</td><td><code>init: true</code> + <code>stop_grace_period: 20s</code>（SIGTERM で終了、yt-dlp/ffmpeg の孤児を回収）</td></tr>
+  </tbody>
+</table>
+<h3>CI とイメージ配布（GHCR）</h3>
+<table>
+  <thead><tr><th>ワークフロー</th><th>トリガ</th><th>内容</th></tr></thead>
+  <tbody>
+    <tr><td><code>.github/workflows/ci.yml</code></td><td>main への push / PR</td>
+      <td><code>gofmt</code> チェック → <code>go vet</code> → <code>go build</code> → <code>go test</code> →
+        <code>GOOS=linux</code> で amd64/arm64 のクロスコンパイル</td></tr>
+    <tr><td><code>.github/workflows/image.yml</code></td><td>main への push / <code>v*.*.*</code> タグ / PR（Dockerfile・Go 関連の変更）/ 手動</td>
+      <td><code>ghcr.io/&lt;owner&gt;/&lt;repo&gt;</code> へ <code>linux/amd64,linux/arm64</code> のマルチアーキイメージをビルド＆プッシュ（PR ではビルド検証のみ）</td></tr>
+    <tr><td><code>.github/workflows/release-please.yml</code></td><td>main への push</td>
+      <td>conventional commits からリリースPR（CHANGELOG + 版上げ）を作成。<strong>そのPRをマージした時点でタグが打たれ、イメージが配布される</strong></td></tr>
+  </tbody>
+</table>
+
+<h3>リリース手順</h3>
+<table>
+  <thead><tr><th>手順</th><th>内容</th></tr></thead>
+  <tbody>
+    <tr><td>1. 変更を貯める</td><td>Renovate のPRや通常のPRを main にマージ（<code>fix:</code> / <code>feat:</code> などの conventional commit）</td></tr>
+    <tr><td>2. リリースPR</td><td><code>chore(main): release x.y.z</code> が自動で作成・更新される（CHANGELOG とバージョン）</td></tr>
+    <tr><td>3. マージしてリリース</td><td>そのPRをマージ → タグ <code>vx.y.z</code> が作られ <code>image.yml</code> が走る → <code>ghcr.io/…:x.y.z</code> / <code>:x.y</code> / <code>:latest</code></td></tr>
+  </tbody>
+</table>
+<p class="muted">
+  初回はタグが無いため <code>1.0.0</code> が提案される（<code>release-type: simple</code>）。<code>0.x</code> から始めたい場合は
+  <code>release-please-config.json</code>（manifest モード + <code>initial-version</code>）を追加するか、
+  事前に <code>v0.0.0</code> タグを打っておく。<code>/leave</code> 等の実装変更は <code>fix:</code> でパッチ、機能追加は <code>feat:</code> でマイナー上がる。
+</p>
+<p>
+  タグは ブランチ名 / <code>sha-xxxxxxx</code> / リリースタグ（<code>v0.1.0</code> → <code>0.1.0</code> / <code>0.1</code>）。
+  <code>latest</code> は<strong>リリースタグのときだけ</strong>付く（＝<code>latest</code> は常に最新リリースを指す）。
+</p>
+
+<h3>依存更新（Renovate）</h3>
+<table>
+  <thead><tr><th>項目</th><th>内容</th></tr></thead>
+  <tbody>
+    <tr><td>設定ファイル</td><td><code>renovate.json5</code>（<code>renovate-config-validator --strict</code> で検証済み）</td></tr>
+    <tr><td>PRの頻度</td><td>常時（週次ゲート無し）。<code>github-actions</code> / <code>gomod</code> / ベースイメージはグループ化。マージ後は release-please のリリースPRに溜まり、それをマージした時点で配布</td></tr>
+    <tr><td>actions の soak</td><td><code>minimumReleaseAge: 3 days</code>（公開直後の乗っ取り回避）</td></tr>
+    <tr><td>actions.lock</td><td>Renovate が更新時に <code>gh actions-lock</code> を内部実行して再生成（<code>constraints.ghActionsLock: v0.4.0</code> でツール版を固定）。<code>pinDigests</code> は使わない</td></tr>
+    <tr><td>yt-dlp</td><td>Dockerfile の <code>ARG</code> と workflow の <code>env</code> を customManager（regex + github-releases）で同時更新</td></tr>
+  </tbody>
+</table>
+
+<h3>ワークフローのセキュリティ</h3>
+<table>
+  <thead><tr><th>項目</th><th>内容</th></tr></thead>
+  <tbody>
+    <tr><td>静的検査</td><td><code>ghasec</code> v0.18.0 で<strong>エラー0</strong>（<code>--online</code> 込み）。指摘に従い
+      トップレベルは <code>permissions: {}</code>、権限はジョブ単位、全ジョブに <code>timeout-minutes</code>、
+      <code>actions/checkout</code> に <code>persist-credentials: false</code> を設定</td></tr>
+    <tr><td>アクションの参照</td><td>ワークフローは<strong>タグ参照</strong>（<code>@v4.4.0</code> など）。実際のコミットは
+      <code>.github/workflows/actions.lock</code> が固定し、GitHub Actions がそのSHAで実行する（タグが動いても影響を受けない）</td></tr>
+    <tr><td>unpinned-action の扱い</td><td>ghasec の当該ルールは<strong>意図的に無効化</strong>（各 <code>uses:</code> の直前に
+      <code># ghasec-ignore: unpinned-action</code>）。固定はロックファイル側で担保する</td></tr>
+    <tr><td>ロックファイル</td><td><code>.github/workflows/actions.lock</code>（<code>gh actions-lock</code> 生成 / lockfile v0.0.3 /
+      7アクション）に ref → commit <code>sha1-…</code> と owner_id/repo_id を記録</td></tr>
+    <tr><td>注意</td><td>ghasec にネットワーク系ルールを効かせるには <code>GHASEC_GITHUB_TOKEN</code> か <code>GITHUB_TOKEN</code> を渡す
+      （<code>GH_TOKEN</code> は読まれない）</td></tr>
+  </tbody>
+</table>
+<p class="muted">
+  更新手順: <code>gh actions-lock</code> を実行すると参照が最新タグに上がり <code>actions.lock</code> が更新される。
+  検証は <code>gh actions-lock --no-fix</code>（<code>All N workflows valid</code>）と
+  <code>GHASEC_GITHUB_TOKEN=… ghasec --online</code>（<code>no errors found</code>）。
+  lockfile の強制が使えない環境（GHES 等）に持っていく場合は、参照を<strong>フルSHAに固定</strong>する形へ戻すこと
+  （その場合は <code># ghasec-ignore</code> を外す）。
+</p>
+<pre><code>docker pull ghcr.io/blueshapes/gomusic:latest   # 公開設定にしていれば
+docker compose pull &amp;&amp; docker compose up -d</code></pre>
+<p class="muted">
+  GHCR のパッケージは既定で<strong>非公開</strong>。誰でも pull できるようにするなら
+  GitHub の Packages 設定で公開に変更する（または <code>docker login ghcr.io</code> でPATを使う）。
+</p>
+
+<p class="muted">
+  更新方針: yt-dlp は頻繁に壊れるので <code>YTDLP_VERSION</code> を上げて定期的に再ビルドする。
+  node は LTS 固定。将来 quickjs 等に替える場合は <code>--js-runtimes</code> の指定とベースイメージだけの変更で済む。
+</p>
+
+<h2 id="limits">制限・未実装</h2>
+<table>
+  <thead><tr><th>項目</th><th>現状</th><th>補足</th></tr></thead>
+  <tbody>
+    <tr><td>長尺曲（1時間超）の開始待ち</td><td class="warn">DL完了まで再生しない</td><td>1時間物は約56MB、回線次第で数十秒待つ。ストリーミング開始は未実装</td></tr>
+    <tr><td>プリフェッチ範囲</td><td class="warn">呼び出し単位の先頭3曲</td><td>プレイリストの4曲目以降は曲間DL。単発 <code>/play</code> を並べると全曲プリフェッチされる（不揃い）</td></tr>
+    <tr><td>音量の永続化</td><td class="warn">メモリのみ</td><td>再起動で100%。VC退出でも保持</td></tr>
+    <tr><td>相対シーク</td><td>非対応</td><td><code>+10</code> / <code>-10</code> は受け付けない</td></tr>
+    <tr><td>単曲ループ</td><td>非対応</td><td><code>off</code> / <code>queue</code> のみ</td></tr>
+    <tr><td><code>/help</code> のメンション表示</td><td>非対応</td><td>コマンドIDの収集が必要なため <code>/name: 説明</code> 形式</td></tr>
+    <tr><td>退出時のDLキャンセル</td><td class="warn">進行中のDLは止まらない</td><td><code>context.Background()</code> で走るため最後まで走り切る（キャッシュには残る）</td></tr>
+    <tr><td>Docker イメージの実ビルド検証</td><td class="warn">未検証</td><td>Dockerfile / compose.yaml は用意済みだが、開発機に Docker が無いためビルド未実施</td></tr>
+  </tbody>
+</table>
+
+<h2 id="dev">開発用CLI（<code>cmd/audioprobe</code>）</h2>
+<p>Discord を使わずに音声層だけ検証できる。</p>
+<pre><code>go run ./cmd/audioprobe -search "lofi hip hop" -limit 5
+go run ./cmd/audioprobe -resolve "https://www.youtube.com/@LofiGirl/videos"
+go run ./cmd/audioprobe -prepare "https://youtu.be/dQw4w9WgXcQ"   # DLしてキャッシュへ
+go run ./cmd/audioprobe -play cache/dQw4w9WgXcQ.ogg -seek 1m30s -packets 20</code></pre>
+<table>
+  <thead><tr><th>フラグ</th><th>内容</th></tr></thead>
+  <tbody>
+    <tr><td><code>-search</code></td><td><code>ytsearch</code> で解決（DLなし）</td></tr>
+    <tr><td><code>-resolve</code></td><td>URL（動画/プレイリスト）を解決（DLなし）</td></tr>
+    <tr><td><code>-prepare</code></td><td>解決してキャッシュ生成まで実行</td></tr>
+    <tr><td><code>-play</code> / <code>-seek</code> / <code>-packets</code></td><td>キャッシュ済み ogg のパケット読み出し・シーク時間の計測</td></tr>
+  </tbody>
+</table>
+
+<p class="sub" style="margin-top:40px">
+  このページは実装（<code>internal/</code> 配下）と実測値に基づく。実装が変わったら同じPRで更新すること。
+</p>
+
+</main>
+</body>
+</html>

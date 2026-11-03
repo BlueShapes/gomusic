@@ -1,0 +1,57 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+
+  // 依存更新は常時PRでOK（配布は weekly-release 側でまとめる）
+  "timezone": "Asia/Tokyo",
+
+  // go.mod / go.sum の整合を取る
+  "postUpdateOptions": ["gomodTidy"],
+
+  // Renovate が内部で使う gh CLI 拡張のバージョン。
+  // actions.lock の再生成結果を再現可能にするため固定する。
+  "constraints": {
+    "ghActionsLock": "v0.4.0"
+  },
+
+  "packageRules": [
+    {
+      // 参照はタグ（@v4.4.0）のまま、コミットは actions.lock が固定する運用。
+      // lockfile が digest pinning の代替なので pinDigests は有効にしない。
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions",
+      // lockfile 再生成を伴うので chore ではなく fix として記録する
+      "semanticCommitType": "fix",
+      // 公開直後の乗っ取りを避けるため、数日寝かせてから上げる
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "matchManagers": ["gomod"],
+      "groupName": "go modules",
+      "semanticCommitType": "fix"
+    },
+    {
+      // Dockerfile の golang / node ベースイメージ
+      "matchManagers": ["dockerfile"],
+      "groupName": "container base images"
+    }
+  ],
+
+  // yt-dlp は日付バージョン（2026.08.19）で、Dockerfile の ARG と
+  // image.yml の env の2箇所にピンしている。両方を同じPRで上げる。
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^Dockerfile$/",
+        "/^\\.github\\/workflows\\/image\\.yml$/"
+      ],
+      "matchStrings": [
+        "YTDLP_VERSION(?::\\s*|\\s*=\\s*)\"?(?<currentValue>\\d{4}\\.\\d{2}\\.\\d{2})\"?"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "yt-dlp/yt-dlp",
+      "versioningTemplate": "loose"
+    }
+  ]
+}
