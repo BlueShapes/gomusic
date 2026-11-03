@@ -390,7 +390,7 @@ docker compose logs -f</code></pre>
     <tr><td><code>.github/workflows/ci.yml</code></td><td>main への push / PR</td>
       <td><code>gofmt</code> チェック → <code>go vet</code> → <code>go build</code> → <code>go test</code> →
         <code>GOOS=linux</code> で amd64/arm64 のクロスコンパイル</td></tr>
-    <tr><td><code>.github/workflows/image.yml</code></td><td>main への push / <code>v*.*.*</code> タグ / PR（Dockerfile・Go 関連の変更）/ 手動</td>
+    <tr><td><code>.github/workflows/image.yml</code></td><td><code>v*.*.*</code> タグ（release-please のリリースPRをマージした時）/ PR（Dockerfile・Go 関連の変更のビルド検証のみ）/ 手動</td>
       <td><code>ghcr.io/&lt;owner&gt;/&lt;repo&gt;</code> へ <code>linux/amd64,linux/arm64</code> のマルチアーキイメージをビルド＆プッシュ（PR ではビルド検証のみ）</td></tr>
     <tr><td><code>.github/workflows/release-please.yml</code></td><td>main への push</td>
       <td>conventional commits からリリースPR（CHANGELOG + 版上げ）を作成。<strong>そのPRをマージした時点でタグが打たれ、イメージが配布される</strong></td></tr>
@@ -414,6 +414,7 @@ docker compose logs -f</code></pre>
 <p>
   タグは ブランチ名 / <code>sha-xxxxxxx</code> / リリースタグ（<code>v0.1.0</code> → <code>0.1.0</code> / <code>0.1</code>）。
   <code>latest</code> は<strong>リリースタグのときだけ</strong>付く（＝<code>latest</code> は常に最新リリースを指す）。
+  main への通常の push ではイメージを作らないので、依存更新などはリリースPRをマージするまで配布されない。
 </p>
 
 <h3>依存更新（Renovate）</h3>
