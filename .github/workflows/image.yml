@@ -4,8 +4,9 @@
 name: image
 
 on:
+  # 配布はリリース時のみ: release-please のリリースPRをマージすると
+  # v* タグが打たれ、その push でここが走る（main への通常 push では動かない）
   push:
-    branches: [main]
     tags: ["v*.*.*"]
   pull_request:
     paths:
