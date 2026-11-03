@@ -1,0 +1,30 @@
+---
+services:
+  gomusic:
+    build:
+      context: .
+      args:
+        # bump deliberately; roll back by changing this one line
+        YTDLP_VERSION: "2026.08.19"
+    image: gomusic:latest
+    restart: unless-stopped
+    # SIGTERM handling relies on hitting PID 1; tini (init) reaps orphaned
+    # yt-dlp/ffmpeg children when a download is killed.
+    init: true
+    stop_grace_period: 20s
+    environment:
+      TZ: Asia/Tokyo
+      # Not needed with the /app bind mount: the default cache_dir ("cache") is
+      # relative to the workdir, so it resolves to ./data/cache on the host.
+      # CACHE_DIR: /app/cache
+      # DISCORD_TOKEN: "..."   # secrets can live here instead of config.toml
+    volumes:
+      # everything the bot owns lives in one host directory:
+      #   ./data/config.toml  ->  /app/config.toml
+      #   ./data/cache/       ->  /app/cache
+      # create it first on the host (a missing bind source is created as root):
+      #   mkdir -p data
+      - ./data:/app
+    # yt-dlp + node peak at ~430MB per running extraction and concurrency=2,
+    # so leave headroom above ~0.9GB.
+    mem_limit: 1536m

@@ -1,0 +1,13 @@
+---
+# Workflows pin actions to full commit SHAs, which are ~40 chars, so the default
+# 80 column limit is not useful here.
+extends: default
+
+rules:
+  line-length:
+    max: 120
+  comments:
+    min-spaces-from-content: 1
+  # GitHub Actions uses `on:` as a key, which YAML 1.1 reads as a boolean
+  truthy:
+    check-keys: false

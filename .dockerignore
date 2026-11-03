@@ -1,0 +1,10 @@
+# secrets and local state must never enter the image
+config.toml
+cache/
+data/
+musicord
+
+.git
+.github
+docs/
+*.md

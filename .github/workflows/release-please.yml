@@ -1,0 +1,29 @@
+---
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  # releases must not be cancelled half-way
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # contents: create tags/releases, pull-requests: open the release PR
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # ghasec-ignore: unpinned-action
+      - uses: googleapis/release-please-action@v5.0.0
+        with:
+          # conventional commits からCHANGELOGと版を決め、リリースPRを作る。
+          # そのPRをマージした時点でタグ（v0.x.y）が打たれ、image.yml が走る。
+          release-type: simple

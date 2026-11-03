@@ -1,0 +1,90 @@
+---
+# Actions are referenced by tag and pinned by commit in actions.lock
+# (``gh actions-lock``), which GitHub enforces at run time.
+name: image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - go.mod
+      - go.sum
+      - "**/*.go"
+      - .github/workflows/image.yml
+  workflow_dispatch:
+
+env:
+  # keep in sync with the Dockerfile default
+  YTDLP_VERSION: "2026.08.19"
+
+permissions: {}
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # granted per job: the top level stays empty
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # ghasec-ignore: unpinned-action
+      - uses: actions/checkout@v4.4.0
+        with:
+          # do not leave the token in .git/config inside the build context
+          persist-credentials: false
+
+      - name: image name
+        id: image
+        # ghcr requires a lowercase repository path
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      # ghasec-ignore: unpinned-action
+      - uses: docker/setup-qemu-action@v3.7.0
+      # ghasec-ignore: unpinned-action
+      - uses: docker/setup-buildx-action@v3.12.0
+
+      # ghasec-ignore: unpinned-action
+      - uses: docker/login-action@v3.7.0
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: tags and labels
+        id: meta
+        # ghasec-ignore: unpinned-action
+        uses: docker/metadata-action@v5.10.0
+        with:
+          images: ${{ steps.image.outputs.name }}
+          # latest は最新リリース（release-please が打った v* タグ）だけに付ける
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      # ghasec-ignore: unpinned-action
+      - uses: docker/build-push-action@v6.19.2
+        with:
+          context: .
+          build-args: |
+            YTDLP_VERSION=${{ env.YTDLP_VERSION }}
+          platforms: linux/amd64,linux/arm64
+          # PRs only validate that the image builds
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
